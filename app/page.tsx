@@ -1,65 +1,311 @@
-import Image from "next/image";
+'use client'
 
-export default function Home() {
+import { useState, useEffect } from 'react'
+import { supabase } from '../lib/supabase'
+import { AlertTriangle, TrendingUp, Clock, Truck, Package, Activity, DollarSign, Percent, BarChart3 } from 'lucide-react'
+
+export default function Dashboard() {
+  const [dashboardData, setDashboardData] = useState<any[]>([])
+  const [leadTime, setLeadTime] = useState<number>(7) 
+  const [isLoading, setIsLoading] = useState(true)
+
+  useEffect(() => {
+    fetchDashboardData()
+  }, [])
+
+  const fetchDashboardData = async () => {
+    setIsLoading(true)
+    const [invRes, salesRes] = await Promise.all([
+      supabase.from('inventory').select('*'),
+      supabase.from('sales').select('*')
+    ])
+
+    if (invRes.data && salesRes.data) {
+      const inventory = invRes.data
+      const sales = salesRes.data
+      const now = new Date().getTime()
+
+      const processedData = inventory.map(item => {
+        const itemSales = sales.filter(s => s.inventory_id === item.id)
+        
+        // 1. Tính toán Tốc độ bán (Sales Velocity)
+        const totalSold = itemSales.reduce((acc, curr) => acc + curr.so_luong_ban, 0)
+        let salesPerDay = 0
+        let avgDaysPerShirt = 0
+        let daysElapsed = 1
+
+        if (totalSold > 0) {
+          const dates = itemSales.map(s => new Date(s.ngay_ban).getTime())
+          const earliestSale = Math.min(...dates)
+          daysElapsed = (now - earliestSale) / (1000 * 3600 * 24)
+          if (daysElapsed < 1) daysElapsed = 1 
+          salesPerDay = totalSold / daysElapsed
+          avgDaysPerShirt = daysElapsed / totalSold
+        }
+
+        // 2. Tính Tỷ lệ bán xuyên suốt (Sell-Through Rate - STR)
+        // Lượng hàng đã nhập = Tồn kho hiện tại + Tổng đã bán
+        const totalReceived = item.so_luong + totalSold
+        const sellThroughRate = totalReceived > 0 ? (totalSold / totalReceived) * 100 : 0
+
+        // 3. Tính toán tài chính cho GMROI
+        const totalRevenue = itemSales.reduce((acc, curr) => acc + Number(curr.tong_tien), 0)
+        const cogs = totalSold * Number(item.gia_nhap) // Giá vốn hàng bán (COGS)
+        const grossMargin = totalRevenue - cogs // Lợi nhuận gộp
+        
+        const currentCapitalTiedUp = item.so_luong * Number(item.gia_nhap) // Vốn đang nằm chết ở tồn kho hiện tại
+        
+        // Công thức GMROI: Lợi nhuận gộp / Chi phí tồn kho trung bình
+        // Ở đây dùng Current Capital để phản ánh snapshot thời gian thực của vốn lưu động
+        let gmroi = 0
+        let isCapitalRecovered = false
+
+        if (currentCapitalTiedUp > 0) {
+          gmroi = grossMargin / currentCapitalTiedUp
+        } else if (currentCapitalTiedUp === 0 && totalSold > 0) {
+          isCapitalRecovered = true // Đã bán hết, thu hồi vốn hoàn toàn
+        }
+
+        return {
+          ...item,
+          totalSold,
+          salesPerDay,
+          avgDaysPerShirt,
+          sellThroughRate,
+          totalRevenue,
+          grossMargin,
+          currentCapitalTiedUp,
+          gmroi,
+          isCapitalRecovered
+        }
+      })
+
+      processedData.sort((a, b) => b.totalSold - a.totalSold)
+      setDashboardData(processedData)
+    }
+    setIsLoading(false)
+  }
+
+  const bestSellers = dashboardData.filter(d => d.totalSold > 0).slice(0, 5)
+  
+  const warnings = dashboardData.map(item => {
+    const reorderPoint = Math.ceil(item.salesPerDay * leadTime)
+    const daysUntilEmpty = item.salesPerDay > 0 ? Math.floor(item.so_luong / item.salesPerDay) : 999
+    
+    return {
+      ...item,
+      reorderPoint,
+      daysUntilEmpty,
+      isWarning: item.so_luong <= reorderPoint && item.so_luong > 0,
+      isOutOfStock: item.so_luong === 0
+    }
+  }).filter(item => item.isWarning || item.isOutOfStock)
+    .sort((a, b) => a.daysUntilEmpty - b.daysUntilEmpty)
+
+  if (isLoading) return <div className="p-8 text-center text-gray-500">Đang chạy mô hình phân tích dữ liệu...</div>
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="p-8 max-w-7xl mx-auto space-y-8">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <Activity size={32} className="text-blue-600" />
+          <h1 className="text-3xl font-bold text-gray-900">Dashboard Quản Trị Chiến Lược</h1>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+        
+        <div className="bg-white px-4 py-2 rounded-lg shadow-sm border flex items-center gap-3">
+          <Truck size={20} className="text-gray-500" />
+          <label className="text-sm font-medium text-gray-700">Lead Time (Chờ hàng):</label>
+          <div className="flex items-center gap-1">
+            <input 
+              type="number" min="1" 
+              className="w-16 border rounded p-1 text-center font-bold text-blue-600 focus:ring-2 focus:ring-blue-200" 
+              value={leadTime} 
+              onChange={e => setLeadTime(Number(e.target.value) || 1)} 
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            <span className="text-sm text-gray-500">ngày</span>
+          </div>
         </div>
-      </main>
+      </div>
+
+      {/* TẦNG 1: VẬN HÀNH CHUỖI CUNG ỨNG */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        
+        {/* Module Tốc độ bán */}
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden flex flex-col">
+          <div className="p-5 border-b bg-gray-50 flex items-center gap-2">
+            <TrendingUp className="text-green-600" size={20} />
+            <h2 className="text-lg font-semibold text-gray-800">Top Sản Phẩm (Sales Velocity)</h2>
+          </div>
+          <div className="p-5 flex-1 overflow-y-auto">
+            {bestSellers.length > 0 ? (
+              <div className="space-y-6">
+                {bestSellers.map((item, index) => (
+                  <div key={item.id} className="relative">
+                    <div className="flex justify-between items-end mb-2">
+                      <div>
+                        <span className="font-bold text-gray-800 text-lg">#{index + 1} {item.ten_ao}</span>
+                        <span className="ml-2 bg-gray-100 text-gray-600 px-2 py-0.5 rounded text-xs">Size {item.size}</span>
+                      </div>
+                      <div className="text-right font-bold text-green-600">{item.totalSold} áo đã bán</div>
+                    </div>
+                    <div className="flex gap-4 text-sm text-gray-500 bg-gray-50 p-3 rounded-md border">
+                      <div className="flex items-center gap-1">
+                        <Clock size={16} className="text-blue-500"/> 
+                        TB: <span className="font-semibold text-gray-700">{item.avgDaysPerShirt.toFixed(1)} ngày/áo</span>
+                      </div>
+                      <div className="border-l pl-4 flex items-center gap-1">
+                        <Package size={16} className="text-orange-500"/>
+                        Tốc độ: <span className="font-semibold text-gray-700">{item.salesPerDay.toFixed(2)} áo/ngày</span>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-gray-500 text-center py-8">Chưa đủ dữ liệu.</p>
+            )}
+          </div>
+        </div>
+
+        {/* Module Cảnh báo Demand Sensing */}
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden flex flex-col">
+          <div className="p-5 border-b bg-red-50 flex items-center gap-2">
+            <AlertTriangle className="text-red-600" size={20} />
+            <h2 className="text-lg font-semibold text-red-800">Cảnh Báo Điểm Đặt Hàng (ROP)</h2>
+          </div>
+          <div className="p-0 flex-1 overflow-y-auto max-h-[400px]">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-gray-50 border-b sticky top-0">
+                <tr>
+                  <th className="p-4 font-semibold text-gray-600">Sản phẩm</th>
+                  <th className="p-4 font-semibold text-gray-600 text-center">Tồn / ROP</th>
+                  <th className="p-4 font-semibold text-gray-600">Tình trạng</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {warnings.map(item => (
+                  <tr key={item.id} className={item.isOutOfStock ? 'bg-red-50' : 'hover:bg-gray-50'}>
+                    <td className="p-4">
+                      <div className="font-medium text-gray-900">{item.ten_ao}</div>
+                      <div className="text-xs text-gray-500">Size {item.size}</div>
+                    </td>
+                    <td className="p-4 text-center">
+                      <span className={`text-lg font-bold ${item.isOutOfStock ? 'text-red-600' : 'text-orange-600'}`}>
+                        {item.so_luong}
+                      </span>
+                      <span className="text-gray-400 mx-1">/</span>
+                      <span className="font-medium text-gray-600">{item.salesPerDay > 0 ? item.reorderPoint : 'N/A'}</span>
+                    </td>
+                    <td className="p-4">
+                      {item.isOutOfStock ? (
+                        <span className="bg-red-100 text-red-700 px-2 py-1 rounded text-xs font-bold">ĐỨT GÃY</span>
+                      ) : (
+                        <div className="flex flex-col gap-1">
+                          <span className="bg-orange-100 text-orange-700 px-2 py-1 rounded text-xs font-bold w-fit">CẦN NHẬP</span>
+                          <span className="text-xs text-gray-500">Hết trong: <b className="text-gray-700">{item.daysUntilEmpty} ngày</b></span>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+                {warnings.length === 0 && (
+                  <tr><td colSpan={3} className="p-8 text-center text-gray-500">Kho đang ở mức an toàn.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* TẦNG 2: PHÂN TÍCH TÀI CHÍNH (GMROI & STR) */}
+      <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
+        <div className="p-5 border-b bg-gradient-to-r from-slate-800 to-slate-900 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BarChart3 className="text-blue-400" size={20} />
+            <h2 className="text-lg font-semibold text-white">Hiệu Quả Vốn & Khả Năng Sinh Lời (GMROI & STR)</h2>
+          </div>
+        </div>
+        <div className="p-0 overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="bg-gray-50 border-b">
+              <tr>
+                <th className="p-4 font-semibold text-gray-600 w-1/4">Sản phẩm / Size</th>
+                <th className="p-4 font-semibold text-gray-600 text-center">
+                  Tỷ lệ bán xuyên suốt (STR)<br/>
+                  <span className="text-xs font-normal text-gray-400">(Đã bán / Tổng nhập)</span>
+                </th>
+                <th className="p-4 font-semibold text-gray-600 text-right">
+                  Lợi nhuận gộp<br/>
+                  <span className="text-xs font-normal text-gray-400">(Biên lợi nhuận)</span>
+                </th>
+                <th className="p-4 font-semibold text-gray-600 text-right">
+                  Vốn đang chôn<br/>
+                  <span className="text-xs font-normal text-gray-400">(Giá trị tồn kho)</span>
+                </th>
+                <th className="p-4 font-semibold text-gray-600 text-right">
+                  Chỉ số GMROI<br/>
+                  <span className="text-xs font-normal text-gray-400">(Tỷ suất sinh lời / 1đ vốn)</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {dashboardData.map((item) => (
+                <tr key={item.id} className="hover:bg-gray-50 transition-colors">
+                  <td className="p-4">
+                    <div className="font-bold text-gray-900">{item.ten_ao}</div>
+                    <div className="text-xs text-gray-500">Size: {item.size}</div>
+                  </td>
+                  
+                  {/* Cột Sell-Through Rate */}
+                  <td className="p-4 text-center">
+                    <div className="flex items-center justify-center gap-2">
+                      <div className="w-full bg-gray-200 rounded-full h-2 max-w-[100px]">
+                        <div 
+                          className={`h-2 rounded-full ${item.sellThroughRate > 70 ? 'bg-green-500' : item.sellThroughRate > 40 ? 'bg-yellow-500' : 'bg-red-500'}`} 
+                          style={{ width: `${Math.min(item.sellThroughRate, 100)}%` }}
+                        ></div>
+                      </div>
+                      <span className="font-bold text-gray-700 w-12">{item.sellThroughRate.toFixed(0)}%</span>
+                    </div>
+                  </td>
+
+                  {/* Cột Lợi nhuận gộp */}
+                  <td className="p-4 text-right">
+                    <div className="font-medium text-green-600">
+                      {item.grossMargin > 0 ? '+' : ''}{(item.grossMargin).toLocaleString('vi-VN')} đ
+                    </div>
+                  </td>
+
+                  {/* Cột Vốn lưu động đang bị chôn */}
+                  <td className="p-4 text-right">
+                    <div className="font-medium text-orange-600">
+                      {(item.currentCapitalTiedUp).toLocaleString('vi-VN')} đ
+                    </div>
+                  </td>
+
+                  {/* Cột GMROI */}
+                  <td className="p-4 text-right">
+                    {item.isCapitalRecovered ? (
+                      <span className="bg-green-100 text-green-800 px-2 py-1 rounded text-xs font-bold border border-green-200">
+                        ĐÃ THU HỒI VỐN
+                      </span>
+                    ) : item.gmroi > 0 ? (
+                      <div className="flex items-center justify-end gap-1">
+                        <span className={`font-bold text-lg ${item.gmroi >= 1.5 ? 'text-green-600' : item.gmroi >= 0.5 ? 'text-blue-600' : 'text-red-500'}`}>
+                          {item.gmroi.toFixed(2)}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-gray-400 italic text-xs">Chưa sinh lời</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      
     </div>
-  );
+  )
 }
