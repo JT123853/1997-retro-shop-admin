@@ -2,12 +2,14 @@
 
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
-import { AlertTriangle, TrendingUp, Clock, Truck, Package, Activity, DollarSign, Percent, BarChart3 } from 'lucide-react'
+import { AlertTriangle, TrendingUp, Clock, Truck, Package, Activity, BarChart3, Download } from 'lucide-react'
+import * as XLSX from 'xlsx'
 
 export default function Dashboard() {
   const [dashboardData, setDashboardData] = useState<any[]>([])
   const [leadTime, setLeadTime] = useState<number>(7) 
   const [isLoading, setIsLoading] = useState(true)
+  const [exportPeriod, setExportPeriod] = useState('ALL') // State lưu kỳ báo cáo
 
   useEffect(() => {
     fetchDashboardData()
@@ -15,9 +17,10 @@ export default function Dashboard() {
 
   const fetchDashboardData = async () => {
     setIsLoading(true)
+    // Lấy dữ liệu tồn kho và dữ liệu bán hàng (CHỈ lấy đơn THANH_CONG, loại bỏ đơn BỊ BOM)
     const [invRes, salesRes] = await Promise.all([
       supabase.from('inventory').select('*'),
-      supabase.from('sales').select('*')
+      supabase.from('sales').select('*').eq('trang_thai_don', 'THANH_CONG')
     ])
 
     if (invRes.data && salesRes.data) {
@@ -43,27 +46,24 @@ export default function Dashboard() {
           avgDaysPerShirt = daysElapsed / totalSold
         }
 
-        // 2. Tính Tỷ lệ bán xuyên suốt (Sell-Through Rate - STR)
-        // Lượng hàng đã nhập = Tồn kho hiện tại + Tổng đã bán
+        // 2. Tính Tỷ lệ bán xuyên suốt (STR)
         const totalReceived = item.so_luong + totalSold
         const sellThroughRate = totalReceived > 0 ? (totalSold / totalReceived) * 100 : 0
 
         // 3. Tính toán tài chính cho GMROI
         const totalRevenue = itemSales.reduce((acc, curr) => acc + Number(curr.tong_tien), 0)
-        const cogs = totalSold * Number(item.gia_nhap) // Giá vốn hàng bán (COGS)
-        const grossMargin = totalRevenue - cogs // Lợi nhuận gộp
+        const cogs = totalSold * Number(item.gia_nhap)
+        const grossMargin = totalRevenue - cogs 
         
-        const currentCapitalTiedUp = item.so_luong * Number(item.gia_nhap) // Vốn đang nằm chết ở tồn kho hiện tại
+        const currentCapitalTiedUp = item.so_luong * Number(item.gia_nhap) 
         
-        // Công thức GMROI: Lợi nhuận gộp / Chi phí tồn kho trung bình
-        // Ở đây dùng Current Capital để phản ánh snapshot thời gian thực của vốn lưu động
         let gmroi = 0
         let isCapitalRecovered = false
 
         if (currentCapitalTiedUp > 0) {
           gmroi = grossMargin / currentCapitalTiedUp
         } else if (currentCapitalTiedUp === 0 && totalSold > 0) {
-          isCapitalRecovered = true // Đã bán hết, thu hồi vốn hoàn toàn
+          isCapitalRecovered = true 
         }
 
         return {
@@ -86,6 +86,91 @@ export default function Dashboard() {
     setIsLoading(false)
   }
 
+  // Hàm xuất file Excel báo cáo có Lọc Thời Gian
+  const handleExportExcel = async () => {
+    alert('Đang tính toán và tổng hợp dữ liệu Excel, vui lòng đợi giây lát...')
+    
+    const [salesRes, expenseRes] = await Promise.all([
+      supabase.from('sales').select('*, inventory(ten_ao, gia_nhap)').eq('trang_thai_don', 'THANH_CONG'),
+      supabase.from('custom_expenses').select('*')
+    ])
+
+    let sales = salesRes.data || []
+    let expenses = expenseRes.data || []
+
+    // XỬ LÝ LOGIC LỌC THỜI GIAN
+    const now = new Date()
+    let startDate = new Date(0) // Mặc định từ năm 1970
+    let endDate = new Date(3000, 0, 1) // Đến năm 3000
+
+    if (exportPeriod === 'CURRENT_MONTH') {
+      startDate = new Date(now.getFullYear(), now.getMonth(), 1)
+      endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59)
+    } else if (exportPeriod === 'LAST_MONTH') {
+      startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+      endDate = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59)
+    } else if (exportPeriod === 'CURRENT_QUARTER') {
+      const currentQuarter = Math.floor(now.getMonth() / 3)
+      startDate = new Date(now.getFullYear(), currentQuarter * 3, 1)
+      endDate = new Date(now.getFullYear(), currentQuarter * 3 + 3, 0, 23, 59, 59)
+    }
+
+    // Lọc mảng dữ liệu dựa trên ngày
+    sales = sales.filter(s => {
+      const d = new Date(s.ngay_ban)
+      return d >= startDate && d <= endDate
+    })
+    expenses = expenses.filter(e => {
+      const d = new Date(e.created_at)
+      return d >= startDate && d <= endDate
+    })
+
+    let tongDoanhThu = 0
+    let tongGiaVon = 0
+    
+    const excelSalesData = sales.map(s => {
+      tongDoanhThu += Number(s.tong_tien)
+      const giaVonDonHang = s.so_luong_ban * Number(s.inventory?.gia_nhap || 0)
+      tongGiaVon += giaVonDonHang
+
+      return {
+        'Ngày Bán': new Date(s.ngay_ban).toLocaleDateString('vi-VN'),
+        'Nhân viên': s.ten_nhan_vien || 'N/A',
+        'Sản Phẩm': s.inventory?.ten_ao,
+        'Số Lượng': s.so_luong_ban,
+        'Chiết Khấu (%)': s.khuyen_mai,
+        'Ghi Chú Giảm Giá': s.ghi_chu_giam_gia,
+        'Doanh Thu Thực Tế (VNĐ)': s.tong_tien,
+        'Giá Vốn (VNĐ)': giaVonDonHang,
+        'Lợi Nhuận Gộp (VNĐ)': s.tong_tien - giaVonDonHang
+      }
+    })
+
+    const tongChiPhiVanhHanh = expenses.reduce((acc, curr) => acc + Number(curr.so_tien), 0)
+    const excelExpenseData = expenses.map(e => ({
+      'Ngày Chi': new Date(e.created_at).toLocaleDateString('vi-VN'),
+      'Khoản Chi': e.ten_khoan_chi,
+      'Ghi Chú': e.ghi_chu,
+      'Số Tiền (VNĐ)': e.so_tien
+    }))
+
+    const summaryData = [
+      { 'Chỉ Số': 'Kỳ báo cáo', 'Giá Trị (VNĐ)': exportPeriod },
+      { 'Chỉ Số': 'Tổng Doanh Thu Thực Tế', 'Giá Trị (VNĐ)': tongDoanhThu },
+      { 'Chỉ Số': 'Tổng Giá Vốn Hàng Bán', 'Giá Trị (VNĐ)': tongGiaVon },
+      { 'Chỉ Số': 'Lợi Nhuận Gộp', 'Giá Trị (VNĐ)': tongDoanhThu - tongGiaVon },
+      { 'Chỉ Số': 'Tổng Chi Phí Vận Hành', 'Giá Trị (VNĐ)': tongChiPhiVanhHanh },
+      { 'Chỉ Số': 'LỢI NHUẬN RÒNG (LÃI THUẦN)', 'Giá Trị (VNĐ)': (tongDoanhThu - tongGiaVon) - tongChiPhiVanhHanh }
+    ]
+
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryData), "Tóm Tắt Lãi Lỗ")
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(excelSalesData), "Chi Tiết Bán Hàng")
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(excelExpenseData), "Chi Tiết Chi Phí")
+
+    XLSX.writeFile(wb, `Bao_Cao_Tai_Chinh_1997Retro_${exportPeriod}_${new Date().toLocaleDateString('vi-VN').replace(/\//g, '-')}.xlsx`)
+  }
+
   const bestSellers = dashboardData.filter(d => d.totalSold > 0).slice(0, 5)
   
   const warnings = dashboardData.map(item => {
@@ -106,23 +191,47 @@ export default function Dashboard() {
 
   return (
     <div className="p-8 max-w-7xl mx-auto space-y-8">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <Activity size={32} className="text-blue-600" />
           <h1 className="text-3xl font-bold text-gray-900">Dashboard Quản Trị Chiến Lược</h1>
         </div>
         
-        <div className="bg-white px-4 py-2 rounded-lg shadow-sm border flex items-center gap-3">
-          <Truck size={20} className="text-gray-500" />
-          <label className="text-sm font-medium text-gray-700">Lead Time (Chờ hàng):</label>
-          <div className="flex items-center gap-1">
-            <input 
-              type="number" min="1" 
-              className="w-16 border rounded p-1 text-center font-bold text-blue-600 focus:ring-2 focus:ring-blue-200" 
-              value={leadTime} 
-              onChange={e => setLeadTime(Number(e.target.value) || 1)} 
-            />
-            <span className="text-sm text-gray-500">ngày</span>
+        <div className="flex flex-col sm:flex-row items-center gap-4">
+          
+          {/* Cụm Dropdown chọn tháng/quý & Nút Xuất Excel */}
+          <div className="flex items-center bg-white rounded-lg shadow-sm border overflow-hidden w-full sm:w-auto">
+            <select 
+              className="p-2 border-r bg-gray-50 text-sm font-medium text-gray-700 outline-none cursor-pointer"
+              value={exportPeriod}
+              onChange={(e) => setExportPeriod(e.target.value)}
+            >
+              <option value="ALL">Toàn thời gian</option>
+              <option value="CURRENT_MONTH">Tháng này</option>
+              <option value="LAST_MONTH">Tháng trước</option>
+              <option value="CURRENT_QUARTER">Quý này</option>
+            </select>
+            <button 
+              onClick={handleExportExcel}
+              className="flex items-center justify-center gap-2 bg-green-600 hover:bg-green-700 text-white px-4 py-2 font-semibold transition-colors"
+            >
+              <Download size={18} /> Xuất Excel
+            </button>
+          </div>
+
+          {/* Cài đặt Lead Time */}
+          <div className="bg-white px-4 py-2 rounded-lg shadow-sm border flex items-center gap-3 w-full sm:w-auto justify-center">
+            <Truck size={20} className="text-gray-500" />
+            <label className="text-sm font-medium text-gray-700">Lead Time (Chờ hàng):</label>
+            <div className="flex items-center gap-1">
+              <input 
+                type="number" min="1" 
+                className="w-16 border rounded p-1 text-center font-bold text-blue-600 focus:ring-2 focus:ring-blue-200" 
+                value={leadTime} 
+                onChange={e => setLeadTime(Number(e.target.value) || 1)} 
+              />
+              <span className="text-sm text-gray-500">ngày</span>
+            </div>
           </div>
         </div>
       </div>
@@ -236,7 +345,7 @@ export default function Dashboard() {
                 </th>
                 <th className="p-4 font-semibold text-gray-600 text-right">
                   Lợi nhuận gộp<br/>
-                  <span className="text-xs font-normal text-gray-400">(Biên lợi nhuận)</span>
+                  <span className="text-xs font-normal text-gray-400">(Đã trừ vốn)</span>
                 </th>
                 <th className="p-4 font-semibold text-gray-600 text-right">
                   Vốn đang chôn<br/>
@@ -244,7 +353,7 @@ export default function Dashboard() {
                 </th>
                 <th className="p-4 font-semibold text-gray-600 text-right">
                   Chỉ số GMROI<br/>
-                  <span className="text-xs font-normal text-gray-400">(Tỷ suất sinh lời / 1đ vốn)</span>
+                  <span className="text-xs font-normal text-gray-400">(Lợi nhuận / 1đ vốn)</span>
                 </th>
               </tr>
             </thead>
@@ -256,7 +365,6 @@ export default function Dashboard() {
                     <div className="text-xs text-gray-500">Size: {item.size}</div>
                   </td>
                   
-                  {/* Cột Sell-Through Rate */}
                   <td className="p-4 text-center">
                     <div className="flex items-center justify-center gap-2">
                       <div className="w-full bg-gray-200 rounded-full h-2 max-w-[100px]">
@@ -269,21 +377,18 @@ export default function Dashboard() {
                     </div>
                   </td>
 
-                  {/* Cột Lợi nhuận gộp */}
                   <td className="p-4 text-right">
                     <div className="font-medium text-green-600">
                       {item.grossMargin > 0 ? '+' : ''}{(item.grossMargin).toLocaleString('vi-VN')} đ
                     </div>
                   </td>
 
-                  {/* Cột Vốn lưu động đang bị chôn */}
                   <td className="p-4 text-right">
                     <div className="font-medium text-orange-600">
                       {(item.currentCapitalTiedUp).toLocaleString('vi-VN')} đ
                     </div>
                   </td>
 
-                  {/* Cột GMROI */}
                   <td className="p-4 text-right">
                     {item.isCapitalRecovered ? (
                       <span className="bg-green-100 text-green-800 px-2 py-1 rounded text-xs font-bold border border-green-200">

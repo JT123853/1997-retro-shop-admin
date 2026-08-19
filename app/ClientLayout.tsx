@@ -59,11 +59,18 @@ export default function ClientLayout({ children }: { children: React.ReactNode }
   // 1. MÀN HÌNH CHỜ (Loading)
   if (loading) return <div className="flex h-screen items-center justify-center bg-gray-50 text-gray-500 font-medium">Đang xác thực hệ thống...</div>
 
-  // 2. MÀN HÌNH ĐĂNG NHẬP (Dành cho người chưa đăng nhập)
+ // 2. MÀN HÌNH ĐĂNG NHẬP (Dành cho người chưa đăng nhập)
   if (!session) {
     return (
-      <div className="flex h-screen items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800">
-        <div className="bg-white p-10 rounded-2xl shadow-2xl w-[400px]">
+      <div 
+        className="flex h-screen items-center justify-center bg-cover bg-center relative"
+        style={{ backgroundImage: "url('/bg-login.jpg')" }} // Trỏ đến file ảnh trong thư mục public
+      >
+        {/* Lớp phủ mờ màu đen giúp form đăng nhập nổi bật và dễ đọc chữ hơn */}
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+        
+        {/* Khung đăng nhập (thêm relative và z-10 để nổi lên trên lớp phủ) */}
+        <div className="bg-white p-10 rounded-2xl shadow-2xl w-[400px] relative z-10">
           <div className="flex justify-center mb-6">
             <div className="bg-blue-100 p-4 rounded-full"><Lock className="text-blue-600" size={32} /></div>
           </div>
