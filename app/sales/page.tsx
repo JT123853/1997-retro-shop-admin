@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
-import { ShoppingCart, CheckCircle, Printer, RotateCcw, Plus, Trash2, Mail } from 'lucide-react'
+import { ShoppingCart, CheckCircle, Printer, RotateCcw, Plus, Trash2, Mail, Search, Calendar } from 'lucide-react'
 
 export default function SalesPage() {
   const [inventory, setInventory] = useState<any[]>([])
@@ -11,6 +11,10 @@ export default function SalesPage() {
   
   const [cart, setCart] = useState<any[]>([])
   const [selectedProductId, setSelectedProductId] = useState('')
+
+  // State cho bộ lọc tìm kiếm
+  const [searchTerm, setSearchTerm] = useState('')
+  const [searchDate, setSearchDate] = useState('')
 
   const [formData, setFormData] = useState({
     customer_id: '', ten_nhan_vien: '', khuyen_mai: 0, ghi_chu_giam_gia: '', phuong_thuc_thanh_toan: 'Chuyển khoản', van_chuyen: 'Nhận tại cửa hàng'
@@ -21,8 +25,7 @@ export default function SalesPage() {
   const fetchData = async () => {
     const [invRes, custRes, salesRes] = await Promise.all([
       supabase.from('inventory').select('*').gt('so_luong', 0), 
-      supabase.from('customers').select('*'), // Lấy toàn bộ info KH (bao gồm cả email)
-      // Chú ý: Lấy thêm size từ inventory để gửi email cho chuẩn
+      supabase.from('customers').select('*'),
       supabase.from('sales').select('*, customers(*), inventory(ten_ao, id, size)').order('ngay_ban', { ascending: false }).limit(200)
     ])
     
@@ -80,7 +83,7 @@ export default function SalesPage() {
     if (!error) { alert('Chốt đơn thành công!'); setCart([]); fetchData() }
   }
 
-  const handleReturnOrder = async (order: any) => { /* Giữ nguyên logic Hoàn Hàng */
+  const handleReturnOrder = async (order: any) => {
     if (order.trang_thai_don !== 'THANH_CONG') return
     if (!confirm('Xác nhận khách bom TOÀN BỘ hóa đơn này? Hệ thống sẽ hoàn áo vào kho.')) return
     await supabase.from('sales').update({ trang_thai_don: 'BI_BOM' }).eq('ma_don_hang', order.ma_don_hang)
@@ -91,47 +94,133 @@ export default function SalesPage() {
     alert('Đã hoàn hàng thành công!'); fetchData()
   }
 
-  // TÍNH NĂNG GỬI EMAIL TỰ ĐỘNG
   const handleEmail = (order: any) => {
     const customerEmail = order.customers?.email;
     if (!customerEmail) {
-      alert('Khách hàng này chưa được cập nhật địa chỉ email. Vui lòng vào mục "Khách Hàng" để bổ sung!');
+      alert('Khách hàng này chưa có email. Vui lòng cập nhật ở mục Khách Hàng!');
       return;
     }
-    
-    const subject = encodeURIComponent(`Hóa đơn mua hàng - 1997 Retro Shop (Mã: ${order.ma_don_hang})`);
-    let bodyText = `Kính chào ${order.customers?.ho_ten},\n\nCảm ơn bạn đã tin tưởng và mua sắm tại 1997 Retro Shop!\n\nTHÔNG TIN ĐƠN HÀNG:\n`;
-    
+    const subject = encodeURIComponent(`Hóa đơn mua hàng - 1997 Retro Shop (${order.ma_don_hang})`);
+    let bodyText = `Kính chào ${order.customers?.ho_ten},\n\nCảm ơn bạn đã tin tưởng mua sắm tại 1997 Retro Shop!\n\nTHÔNG TIN ĐƠN HÀNG:\n`;
     order.items.forEach((i: any) => {
        bodyText += `- ${i.inventory?.ten_ao} (Size: ${i.inventory?.size || 'N/A'}) x ${i.so_luong_ban} = ${(i.gia_ban * i.so_luong_ban).toLocaleString('vi-VN')} đ\n`;
     });
-    
     bodyText += `-----------------------\n`;
-    if (order.khuyen_mai > 0) bodyText += `Chiết khấu giảm giá: -${order.khuyen_mai}%\n`;
-    bodyText += `TỔNG THANH TOÁN: ${order.tong_tien_don?.toLocaleString('vi-VN')} đ\n\n`;
-    bodyText += `Mọi thắc mắc về đơn hàng, quý khách vui lòng liên hệ trực tiếp với cửa hàng.\nTrân trọng,\n1997 Retro Shop`;
-    
-    // Kích hoạt ứng dụng Mail trên máy tính/điện thoại
+    if (order.khuyen_mai > 0) bodyText += `Chiết khấu: -${order.khuyen_mai}%\n`;
+    bodyText += `TỔNG THANH TOÁN: ${order.tong_tien_don?.toLocaleString('vi-VN')} đ\n\nTrân trọng,\n1997 Retro Shop`;
     window.location.href = `mailto:${customerEmail}?subject=${subject}&body=${encodeURIComponent(bodyText)}`;
   }
 
-  const handlePrint = (order: any) => { /* Giữ nguyên in hóa đơn */
-    const receiptWindow = window.open('', '_blank', 'width=400,height=600')
-    const itemsHtml = order.items.map((i:any) => `<p style="margin:2px 0; font-size:13px">${i.inventory?.ten_ao} (x${i.so_luong_ban}) <span style="float:right">${(i.gia_ban * i.so_luong_ban).toLocaleString('vi-VN')} đ</span></p>`).join('')
+const handlePrint = (order: any) => {
+    const receiptWindow = window.open('', '_blank', 'width=400,height=700')
+    
+    // 1. Tính toán tạm tính (trước khi giảm giá)
+    const subTotal = order.items.reduce((acc: number, i: any) => acc + (i.gia_ban * i.so_luong_ban), 0);
+    const discountAmount = subTotal * (order.khuyen_mai / 100);
+
+    // 2. Tạo danh sách sản phẩm đẹp mắt
+    const itemsHtml = order.items.map((i: any) => `
+      <div style="margin-bottom: 8px;">
+        <div style="font-weight: bold; font-size: 13px;">${i.inventory?.ten_ao} - Size: ${i.inventory?.size || 'N/A'}</div>
+        <div style="display: flex; justify-content: space-between; font-size: 13px; color: #333;">
+          <span>SL: ${i.so_luong_ban} x ${Number(i.gia_ban).toLocaleString('vi-VN')}</span>
+          <span>${(i.gia_ban * i.so_luong_ban).toLocaleString('vi-VN')} đ</span>
+        </div>
+      </div>
+    `).join('')
+
+    // 3. Khung HTML của hóa đơn
+    const html = `
+      <html>
+      <head>
+        <title>Hóa đơn ${order.ma_don_hang}</title>
+        <style>
+          body { font-family: 'Courier New', Courier, monospace; font-size: 14px; padding: 15px; color: #000; max-width: 80mm; margin: 0 auto; }
+          .text-center { text-align: center; }
+          .text-right { text-align: right; }
+          .font-bold { font-weight: bold; }
+          .divider { border-top: 1px dashed #000; margin: 10px 0; }
+        </style>
+      </head>
+      <body>
+        <!-- THÔNG TIN SHOP CỦA BẠN (CÓ THỂ SỬA LẠI THÔNG TIN BÊN DƯỚI) -->
+        <h2 class="text-center" style="margin-bottom: 5px; font-size: 20px;">1997 RETRO SHOP</h2>
+        <p class="text-center" style="margin: 3px 0; font-size: 12px;">Đ/c: 123 Đường Cổ Điển, TP.HCM</p>
+        <p class="text-center" style="margin: 3px 0; font-size: 12px;">Hotline: 0987.654.321</p>
+        <p class="text-center" style="margin: 3px 0; font-size: 12px;">IG/FB: @1997retro.shop</p>
+        
+        <div class="divider"></div>
+        
+        <p class="text-center font-bold" style="font-size: 16px;">HÓA ĐƠN BÁN HÀNG</p>
+        <p style="font-size: 12px; margin: 3px 0;"><strong>Mã HĐ:</strong> ${order.ma_don_hang}</p>
+        <p style="font-size: 12px; margin: 3px 0;"><strong>Ngày:</strong> ${new Date(order.ngay_ban).toLocaleString('vi-VN')}</p>
+        <p style="font-size: 12px; margin: 3px 0;"><strong>Thu ngân:</strong> ${order.ten_nhan_vien || 'Admin'}</p>
+        <p style="font-size: 12px; margin: 3px 0;"><strong>Khách hàng:</strong> ${order.customers?.ho_ten} ${order.customers?.so_dien_thoai ? ` - ${order.customers.so_dien_thoai}` : ''}</p>
+        
+        <div class="divider"></div>
+        
+        <!-- CHI TIẾT SẢN PHẨM -->
+        <div style="margin: 10px 0;">
+          ${itemsHtml}
+        </div>
+        
+        <div class="divider"></div>
+        
+        <!-- TỔNG KẾT TIỀN -->
+        <p class="text-right" style="font-size: 13px; margin: 5px 0;">Tạm tính: ${subTotal.toLocaleString('vi-VN')} đ</p>
+        ${order.khuyen_mai > 0 ? `<p class="text-right" style="font-size: 13px; margin: 5px 0;">Giảm giá (${order.khuyen_mai}%): -${discountAmount.toLocaleString('vi-VN')} đ</p>` : ''}
+        
+        <h3 class="text-right" style="margin: 10px 0; font-size: 18px;">TỔNG: ${order.tong_tien_don?.toLocaleString('vi-VN')} đ</h3>
+        
+        <div class="divider"></div>
+        
+        <!-- LỜI CẢM ƠN CHÂN TRANG -->
+        <p class="text-center" style="margin-top: 15px; font-size: 12px; font-style: italic; line-height: 1.4;">
+          Cảm ơn quý khách đã mua sắm tại 1997 Retro Shop!<br/>
+          Hẹn gặp lại quý khách!
+        </p>
+      </body>
+      </html>
+    `
     if (receiptWindow) {
-      receiptWindow.document.write(`<html><head><title>Hóa đơn ${order.ma_don_hang}</title></head><body style="font-family: monospace; padding: 15px; color: #000;"><h2 style="text-align: center; margin-bottom: 5px;">1997 RETRO SHOP</h2><p style="text-align: center; margin-top: 0;">Mã: ${order.ma_don_hang}</p><hr style="border-top: 1px dashed #000;" /><p><strong>Khách hàng:</strong> ${order.customers?.ho_ten}</p><p><strong>Ngày lập:</strong> ${new Date(order.ngay_ban).toLocaleString('vi-VN')}</p><p><strong>Nhân viên:</strong> ${order.ten_nhan_vien || 'Admin'}</p><hr style="border-top: 1px dashed #000;" /><div style="margin: 10px 0;">${itemsHtml}</div><hr style="border-top: 1px dashed #000;" /><p style="text-align: right; font-size:13px">Giảm giá: ${order.khuyen_mai}%</p><h3 style="text-align: right;">TỔNG: ${order.tong_tien_don?.toLocaleString('vi-VN')} đ</h3><p style="text-align: center; margin-top: 30px;">Cảm ơn quý khách!</p></body></html>`)
-      receiptWindow.document.close(); receiptWindow.focus(); setTimeout(() => { receiptWindow.print(); receiptWindow.close() }, 250)
+      receiptWindow.document.write(html)
+      receiptWindow.document.close()
+      receiptWindow.focus()
+      // Chờ trình duyệt render HTML xong mới gọi lệnh in
+      setTimeout(() => { receiptWindow.print(); receiptWindow.close() }, 250)
     }
   }
-
   const subTotal = cart.reduce((acc, item) => acc + (item.gia_ban * item.so_luong_ban), 0)
   const finalTotal = subTotal * (1 - (formData.khuyen_mai || 0) / 100)
+  // XỬ LÝ LỌC LỊCH SỬ HÓA ĐƠN
+  const filteredHistory = salesHistory.filter(order => {
+    let matchSearch = true;
+    let matchDate = true;
+
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      const matchCustomer = order.customers?.ho_ten?.toLowerCase().includes(term);
+      const matchOrderId = order.ma_don_hang?.toLowerCase().includes(term);
+      // Quét tìm trong danh sách các sản phẩm của hóa đơn đó
+      const matchProduct = order.items.some((item: any) => item.inventory?.ten_ao?.toLowerCase().includes(term));
+      
+      matchSearch = !!(matchCustomer || matchOrderId || matchProduct);
+    }
+
+    if (searchDate) {
+      // Chuyển đổi ngày bán về chuẩn YYYY-MM-DD để so sánh với input date
+      const orderDateStr = new Date(order.ngay_ban).toLocaleDateString('en-CA');
+      matchDate = orderDateStr === searchDate;
+    }
+
+    return matchSearch && matchDate;
+  });
 
   return (
     <div className="p-8 max-w-7xl mx-auto space-y-8">
       <div className="flex items-center gap-3">
         <ShoppingCart size={32} className="text-green-600" />
-        <h1 className="text-3xl font-bold text-gray-900">Màn hình Bán Hàng (POS 1.0)</h1>
+        <h1 className="text-3xl font-bold text-gray-900">Màn hình Bán Hàng (POS 1.1)</h1>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -154,9 +243,14 @@ export default function SalesPage() {
           <div className="border-t pt-4">
             <label className="block text-sm font-medium mb-1 text-orange-600">Thêm áo vào giỏ hàng</label>
             <div className="flex gap-2">
-              <select className="flex-1 border rounded p-2" value={selectedProductId} onChange={e => setSelectedProductId(e.target.value)}>
+              <select className="flex-1 border rounded p-2 text-sm" value={selectedProductId} onChange={e => setSelectedProductId(e.target.value)}>
                 <option value="">-- Chọn áo để bán --</option>
-                {inventory.map(i => <option key={i.id} value={i.id}>{i.ten_ao} (Tồn: {i.so_luong}) - {Number(i.gia_ban).toLocaleString('vi-VN')}đ</option>)}
+                {inventory.map(i => (
+                  <option key={i.id} value={i.id}>
+                    {/* BỔ SUNG HIỂN THỊ SIZE ÁO Ở ĐÂY */}
+                    {i.ten_ao} (Size: {i.size}) - Tồn: {i.so_luong} - {Number(i.gia_ban).toLocaleString('vi-VN')}đ
+                  </option>
+                ))}
               </select>
               <button type="button" onClick={handleAddToCart} className="bg-orange-500 text-white px-4 py-2 rounded font-bold hover:bg-orange-600"><Plus size={20} /></button>
             </div>
@@ -182,7 +276,7 @@ export default function SalesPage() {
                 <tbody className="divide-y">
                   {cart.map(c => (
                     <tr key={c.inventory_id}>
-                      <td className="p-2 font-medium">{c.ten_ao} <span className="text-xs text-gray-500">({c.size})</span></td>
+                      <td className="p-2 font-medium">{c.ten_ao} <span className="text-xs text-blue-600 font-bold">(Size {c.size})</span></td>
                       <td className="p-2 text-center">
                         <input type="number" min="1" max={c.ton_kho} className="w-16 border rounded text-center p-1" value={c.so_luong_ban} onChange={e => setCart(cart.map(item => item.inventory_id === c.inventory_id ? {...item, so_luong_ban: Number(e.target.value)} : item))} />
                       </td>
@@ -203,26 +297,43 @@ export default function SalesPage() {
         </div>
 
         <div className="lg:col-span-12 bg-white rounded-lg shadow-sm border overflow-hidden mt-4">
-          <div className="p-4 bg-gray-50 border-b font-semibold text-gray-700">Lịch sử Hóa đơn Bán hàng</div>
+          
+          {/* THANH TÌM KIẾM MỚI THÊM VÀO */}
+          <div className="p-4 bg-gray-50 border-b flex flex-col sm:flex-row items-center justify-between gap-4">
+            <span className="font-semibold text-gray-700">Lịch sử Hóa đơn ({filteredHistory.length})</span>
+            <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
+              <div className="relative w-full sm:w-64">
+                <Search size={16} className="absolute left-3 top-2.5 text-gray-400" />
+                <input type="text" placeholder="Tìm khách, tên áo, mã đơn..." className="pl-9 p-2 border rounded w-full text-sm"
+                  value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+              </div>
+              <div className="relative w-full sm:w-auto">
+                <Calendar size={16} className="absolute left-3 top-2.5 text-gray-400" />
+                <input type="date" className="pl-9 p-2 border rounded w-full text-sm text-gray-600"
+                  value={searchDate} onChange={(e) => setSearchDate(e.target.value)} />
+              </div>
+              {(searchTerm || searchDate) && (
+                <button onClick={() => {setSearchTerm(''); setSearchDate('')}} className="text-sm text-red-500 hover:underline whitespace-nowrap">Xóa bộ lọc</button>
+              )}
+            </div>
+          </div>
+
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
               <thead className="bg-gray-100 border-b">
                 <tr><th className="p-4">Mã Đơn / Ngày</th><th className="p-4">Khách hàng</th><th className="p-4">Sản phẩm</th><th className="p-4 text-right">Tổng thanh toán</th><th className="p-4 text-center">Thao tác</th></tr>
               </thead>
               <tbody className="divide-y">
-                {salesHistory.map((order) => (
+                {filteredHistory.map((order) => (
                   <tr key={order.ma_don_hang} className={order.trang_thai_don === 'BI_BOM' ? 'bg-red-50 text-gray-400' : 'hover:bg-gray-50'}>
                     <td className="p-4"><div className="font-bold text-blue-600">{order.ma_don_hang}</div><div className="text-xs">{new Date(order.ngay_ban).toLocaleDateString('vi-VN')}</div></td>
                     <td className="p-4 font-medium">{order.customers?.ho_ten}</td>
-                    <td className="p-4 text-xs">{order.items.map((i:any, idx:number) => (<div key={idx}>• {i.inventory?.ten_ao} (x{i.so_luong_ban})</div>))} {order.khuyen_mai > 0 && <span className="text-red-500 font-bold block">Khuyến mãi: -{order.khuyen_mai}%</span>}</td>
+                    <td className="p-4 text-xs">{order.items.map((i:any, idx:number) => (<div key={idx}>• {i.inventory?.ten_ao} <span className="font-bold text-gray-500">(Size {i.inventory?.size})</span> (x{i.so_luong_ban})</div>))} {order.khuyen_mai > 0 && <span className="text-red-500 font-bold block">Khuyến mãi: -{order.khuyen_mai}%</span>}</td>
                     <td className="p-4 text-right font-black text-green-600 text-base">{order.tong_tien_don?.toLocaleString('vi-VN')} đ</td>
                     <td className="p-4 text-center">
                       <div className="flex items-center justify-center gap-4">
                         <button onClick={() => handlePrint(order)} title="In hóa đơn" className="text-gray-500 hover:text-blue-600"><Printer size={20} /></button>
-                        
-                        {/* NÚT GỬI EMAIL */}
                         <button onClick={() => handleEmail(order)} title="Gửi Email Hóa Đơn" className="text-gray-500 hover:text-orange-600"><Mail size={20} /></button>
-                        
                         {order.trang_thai_don === 'THANH_CONG' ? (
                           <button onClick={() => handleReturnOrder(order)} title="Bom toàn bộ đơn" className="text-red-500 hover:text-red-700"><RotateCcw size={20} /></button>
                         ) : (<span className="text-[10px] font-bold bg-red-200 text-red-800 px-2 py-1 rounded">BỊ BOM</span>)}
@@ -230,6 +341,9 @@ export default function SalesPage() {
                     </td>
                   </tr>
                 ))}
+                {filteredHistory.length === 0 && (
+                  <tr><td colSpan={5} className="p-8 text-center text-gray-500">Không tìm thấy dữ liệu hóa đơn nào.</td></tr>
+                )}
               </tbody>
             </table>
           </div>
