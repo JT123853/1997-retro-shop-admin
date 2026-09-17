@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase'
-import { ShoppingCart, CheckCircle, Printer, RotateCcw, Plus, Trash2, Mail, Search, Calendar } from 'lucide-react'
+import { ShoppingCart, CheckCircle, Printer, RotateCcw, Trash2, Mail, Search, Calendar } from 'lucide-react'
 
 export default function SalesPage() {
   const [inventory, setInventory] = useState<any[]>([])
@@ -12,7 +12,6 @@ export default function SalesPage() {
   const [cart, setCart] = useState<any[]>([])
   const [selectedProductId, setSelectedProductId] = useState('')
 
-  // State cho bộ lọc tìm kiếm
   const [searchTerm, setSearchTerm] = useState('')
   const [searchDate, setSearchDate] = useState('')
 
@@ -50,21 +49,6 @@ export default function SalesPage() {
     }
   }
 
-  const handleAddToCart = () => {
-    if (!selectedProductId) return
-    const product = inventory.find(i => i.id === selectedProductId)
-    if (!product) return
-
-    const existingItem = cart.find(c => c.inventory_id === product.id)
-    if (existingItem) {
-      if (existingItem.so_luong_ban >= product.so_luong) return alert('Vượt quá số lượng tồn kho!')
-      setCart(cart.map(c => c.inventory_id === product.id ? { ...c, so_luong_ban: c.so_luong_ban + 1 } : c))
-    } else {
-      setCart([...cart, { inventory_id: product.id, ten_ao: product.ten_ao, size: product.size, gia_ban: product.gia_ban, ton_kho: product.so_luong, so_luong_ban: 1 }])
-    }
-    setSelectedProductId('')
-  }
-
   const handleCheckout = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!formData.customer_id) return alert("Vui lòng chọn khách hàng!")
@@ -80,7 +64,7 @@ export default function SalesPage() {
     }))
 
     const { error } = await supabase.from('sales').insert(salesInserts)
-    if (!error) { alert('Chốt đơn thành công!'); setCart([]); fetchData() }
+    if (!error) { alert('Chốt đơn thành công!'); setCart([]); setFormData({...formData, khuyen_mai: 0, ghi_chu_giam_gia: ''}); fetchData() }
   }
 
   const handleReturnOrder = async (order: any) => {
@@ -111,14 +95,12 @@ export default function SalesPage() {
     window.location.href = `mailto:${customerEmail}?subject=${subject}&body=${encodeURIComponent(bodyText)}`;
   }
 
-const handlePrint = (order: any) => {
+  const handlePrint = (order: any) => {
     const receiptWindow = window.open('', '_blank', 'width=400,height=700')
     
-    // 1. Tính toán tạm tính (trước khi giảm giá)
-    const subTotal = order.items.reduce((acc: number, i: any) => acc + (i.gia_ban * i.so_luong_ban), 0);
-    const discountAmount = subTotal * (order.khuyen_mai / 100);
+    const printSubTotal = order.items.reduce((acc: number, i: any) => acc + (i.gia_ban * i.so_luong_ban), 0);
+    const discountAmount = printSubTotal * (order.khuyen_mai / 100);
 
-    // 2. Tạo danh sách sản phẩm đẹp mắt
     const itemsHtml = order.items.map((i: any) => `
       <div style="margin-bottom: 8px;">
         <div style="font-weight: bold; font-size: 13px;">${i.inventory?.ten_ao} - Size: ${i.inventory?.size || 'N/A'}</div>
@@ -129,7 +111,6 @@ const handlePrint = (order: any) => {
       </div>
     `).join('')
 
-    // 3. Khung HTML của hóa đơn
     const html = `
       <html>
       <head>
@@ -143,7 +124,6 @@ const handlePrint = (order: any) => {
         </style>
       </head>
       <body>
-        <!-- THÔNG TIN SHOP CỦA BẠN (CÓ THỂ SỬA LẠI THÔNG TIN BÊN DƯỚI) -->
         <h2 class="text-center" style="margin-bottom: 5px; font-size: 20px;">1997 RETRO SHOP</h2>
         <p class="text-center" style="margin: 3px 0; font-size: 12px;">Đ/c: 123 Đường Cổ Điển, TP.HCM</p>
         <p class="text-center" style="margin: 3px 0; font-size: 12px;">Hotline: 0987.654.321</p>
@@ -159,24 +139,22 @@ const handlePrint = (order: any) => {
         
         <div class="divider"></div>
         
-        <!-- CHI TIẾT SẢN PHẨM -->
         <div style="margin: 10px 0;">
           ${itemsHtml}
         </div>
         
         <div class="divider"></div>
         
-        <!-- TỔNG KẾT TIỀN -->
-        <p class="text-right" style="font-size: 13px; margin: 5px 0;">Tạm tính: ${subTotal.toLocaleString('vi-VN')} đ</p>
+        <p class="text-right" style="font-size: 13px; margin: 5px 0;">Tạm tính: ${printSubTotal.toLocaleString('vi-VN')} đ</p>
         ${order.khuyen_mai > 0 ? `<p class="text-right" style="font-size: 13px; margin: 5px 0;">Giảm giá (${order.khuyen_mai}%): -${discountAmount.toLocaleString('vi-VN')} đ</p>` : ''}
         
         <h3 class="text-right" style="margin: 10px 0; font-size: 18px;">TỔNG: ${order.tong_tien_don?.toLocaleString('vi-VN')} đ</h3>
         
         <div class="divider"></div>
         
-        <!-- LỜI CẢM ƠN CHÂN TRANG -->
         <p class="text-center" style="margin-top: 15px; font-size: 12px; font-style: italic; line-height: 1.4;">
           Cảm ơn quý khách đã mua sắm tại 1997 Retro Shop!<br/>
+          (Hàng mua rồi miễn đổi trả sau 3 ngày)<br/>
           Hẹn gặp lại quý khách!
         </p>
       </body>
@@ -186,13 +164,13 @@ const handlePrint = (order: any) => {
       receiptWindow.document.write(html)
       receiptWindow.document.close()
       receiptWindow.focus()
-      // Chờ trình duyệt render HTML xong mới gọi lệnh in
       setTimeout(() => { receiptWindow.print(); receiptWindow.close() }, 250)
     }
   }
+
   const subTotal = cart.reduce((acc, item) => acc + (item.gia_ban * item.so_luong_ban), 0)
   const finalTotal = subTotal * (1 - (formData.khuyen_mai || 0) / 100)
-  // XỬ LÝ LỌC LỊCH SỬ HÓA ĐƠN
+
   const filteredHistory = salesHistory.filter(order => {
     let matchSearch = true;
     let matchDate = true;
@@ -201,14 +179,11 @@ const handlePrint = (order: any) => {
       const term = searchTerm.toLowerCase();
       const matchCustomer = order.customers?.ho_ten?.toLowerCase().includes(term);
       const matchOrderId = order.ma_don_hang?.toLowerCase().includes(term);
-      // Quét tìm trong danh sách các sản phẩm của hóa đơn đó
       const matchProduct = order.items.some((item: any) => item.inventory?.ten_ao?.toLowerCase().includes(term));
-      
       matchSearch = !!(matchCustomer || matchOrderId || matchProduct);
     }
 
     if (searchDate) {
-      // Chuyển đổi ngày bán về chuẩn YYYY-MM-DD để so sánh với input date
       const orderDateStr = new Date(order.ngay_ban).toLocaleDateString('en-CA');
       matchDate = orderDateStr === searchDate;
     }
@@ -240,21 +215,44 @@ const handlePrint = (order: any) => {
               </select>
             </div>
           </div>
+          
           <div className="border-t pt-4">
-            <label className="block text-sm font-medium mb-1 text-orange-600">Thêm áo vào giỏ hàng</label>
-            <div className="flex gap-2">
-              <select className="flex-1 border rounded p-2 text-sm" value={selectedProductId} onChange={e => setSelectedProductId(e.target.value)}>
-                <option value="">-- Chọn áo để bán --</option>
-                {inventory.map(i => (
-                  <option key={i.id} value={i.id}>
-                    {/* BỔ SUNG HIỂN THỊ SIZE ÁO Ở ĐÂY */}
-                    {i.ten_ao} (Size: {i.size}) - Tồn: {i.so_luong} - {Number(i.gia_ban).toLocaleString('vi-VN')}đ
-                  </option>
-                ))}
-              </select>
-              <button type="button" onClick={handleAddToCart} className="bg-orange-500 text-white px-4 py-2 rounded font-bold hover:bg-orange-600"><Plus size={20} /></button>
-            </div>
+            <label className="block text-sm font-medium mb-1 text-orange-600">Thêm áo vào giỏ hàng (Tự động thêm)</label>
+            <select 
+              className="w-full border rounded p-3 text-sm bg-orange-50 focus:outline-none focus:ring-2 focus:ring-orange-500 font-medium cursor-pointer" 
+              value={selectedProductId} 
+              onChange={e => {
+                const productId = e.target.value;
+                if (!productId) return;
+                
+                const product = inventory.find(i => i.id === productId);
+                if (!product) return;
+
+                setCart(prevCart => {
+                  const existingItem = prevCart.find(c => c.inventory_id === product.id);
+                  if (existingItem) {
+                    if (existingItem.so_luong_ban >= product.so_luong) {
+                      setTimeout(() => alert('Vượt quá số lượng tồn kho!'), 100);
+                      return prevCart;
+                    }
+                    return prevCart.map(c => c.inventory_id === product.id ? { ...c, so_luong_ban: c.so_luong_ban + 1 } : c);
+                  } else {
+                    return [...prevCart, { inventory_id: product.id, ten_ao: product.ten_ao, size: product.size, gia_ban: product.gia_ban, ton_kho: product.so_luong, so_luong_ban: 1 }];
+                  }
+                });
+                
+                setSelectedProductId('');
+              }}
+            >
+              <option value="">-- Bấm vào đây để chọn áo bán --</option>
+              {inventory.map(i => (
+                <option key={i.id} value={i.id}>
+                  {i.ten_ao} (Size: {i.size}) - Tồn: {i.so_luong} - {Number(i.gia_ban).toLocaleString('vi-VN')}đ
+                </option>
+              ))}
+            </select>
           </div>
+
           <div className="border-t pt-4 grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium mb-1">Giảm giá HĐ (%)</label>
@@ -293,12 +291,10 @@ const handlePrint = (order: any) => {
             {formData.khuyen_mai > 0 && <div className="flex justify-between text-sm text-red-500 mb-2"><span>Giảm giá ({formData.khuyen_mai}%):</span> <span>-{(subTotal - finalTotal).toLocaleString('vi-VN')} đ</span></div>}
             <div className="flex justify-between items-end border-t pt-2 mt-2"><span className="font-semibold text-gray-700">TỔNG:</span><span className="text-3xl font-bold text-green-600">{finalTotal.toLocaleString('vi-VN')} đ</span></div>
           </div>
-          <button onClick={handleCheckout} className="w-full mt-4 bg-green-600 text-white p-4 rounded-lg hover:bg-green-700 font-black text-xl flex justify-center gap-2"><CheckCircle size={28} /> CHỐT ĐƠN</button>
+          <button onClick={handleCheckout} className="w-full mt-4 bg-green-600 text-white p-4 rounded-lg hover:bg-green-700 font-black text-xl flex justify-center gap-2 transition-all"><CheckCircle size={28} /> CHỐT ĐƠN</button>
         </div>
 
         <div className="lg:col-span-12 bg-white rounded-lg shadow-sm border overflow-hidden mt-4">
-          
-          {/* THANH TÌM KIẾM MỚI THÊM VÀO */}
           <div className="p-4 bg-gray-50 border-b flex flex-col sm:flex-row items-center justify-between gap-4">
             <span className="font-semibold text-gray-700">Lịch sử Hóa đơn ({filteredHistory.length})</span>
             <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
