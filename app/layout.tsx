@@ -12,11 +12,11 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="vi">
-      <body className="bg-gray-100 overflow-hidden">
+    <html lang="vi" suppressHydrationWarning>
+      <body className="bg-gray-100 overflow-hidden" suppressHydrationWarning>
         {/* Chuyển toàn bộ logic giao diện sang file ClientLayout */}
         <ClientLayout>{children}</ClientLayout>
       </body>
     </html>
   )
-}
+}   
