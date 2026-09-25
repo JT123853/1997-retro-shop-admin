@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../../lib/supabase'
-import { ShoppingCart, CheckCircle, Printer, RotateCcw, Trash2, Mail, Search, Calendar } from 'lucide-react'
+import { ShoppingCart, CheckCircle, Printer, RotateCcw, Trash2, Mail, Search, Calendar, Edit3, X } from 'lucide-react'
 
 export default function SalesPage() {
   const [inventory, setInventory] = useState<any[]>([])
@@ -10,10 +10,32 @@ export default function SalesPage() {
   const [salesHistory, setSalesHistory] = useState<any[]>([])
   
   const [cart, setCart] = useState<any[]>([])
-  const [selectedProductId, setSelectedProductId] = useState('')
 
+  // State cho thanh tìm kiếm chọn áo nhanh
+  const [productSearchTerm, setProductSearchTerm] = useState('')
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false)
+  const dropdownRef = useRef<HTMLDivElement>(null)
+
+  // State cho bộ lọc lịch sử đơn hàng
   const [searchTerm, setSearchTerm] = useState('')
   const [searchDate, setSearchDate] = useState('')
+
+  // State cho Modal chỉnh sửa đơn hàng (Edit Order)
+  const [editingOrder, setEditingOrder] = useState<any | null>(null)
+  const [editFormData, setEditFormData] = useState({
+    ten_nhan_vien: '',
+    van_chuyen: '',
+    khuyen_mai: 0,
+    ghi_chu_giam_gia: '',
+    phi_dieu_chinh: 0,
+    ly_do_dieu_chinh: '',
+    tien_coc: 0,
+    ghi_chu_coc_dan_do: ''
+  })
+
+  // HẠ TẦNG PHÂN QUYỀN SẴN SÀNG:
+  // Giai đoạn hiện tại đặt true để được sửa. Về sau gắn: currentUser?.role === 'admin'
+  const [isAdmin] = useState(true)
 
   const [formData, setFormData] = useState({
     customer_id: '', 
@@ -29,7 +51,18 @@ export default function SalesPage() {
     ly_do_dieu_chinh: ''
   })
 
-  useEffect(() => { fetchData() }, [])
+  useEffect(() => { 
+    fetchData() 
+
+    // Đóng dropdown tìm sản phẩm khi click ra ngoài
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
 
   const fetchData = async () => {
     const [invRes, custRes, salesRes] = await Promise.all([
@@ -51,17 +84,23 @@ export default function SalesPage() {
             ngay_ban: s.ngay_ban, 
             ten_nhan_vien: s.ten_nhan_vien,
             customers: s.customers, 
+            customer_id: s.customer_id,
             khuyen_mai: s.khuyen_mai, 
             ghi_chu_giam_gia: s.ghi_chu_giam_gia,
             van_chuyen: s.van_chuyen,
             phuong_thuc_thanh_toan: s.phuong_thuc_thanh_toan,
-            tien_coc: s.tien_coc || 0,
+            tien_coc: Number(s.tien_coc) || 0,
             ghi_chu_coc_dan_do: s.ghi_chu_coc_dan_do || '',
-            phi_dieu_chinh: s.phi_dieu_chinh || 0,
+            phi_dieu_chinh: Number(s.phi_dieu_chinh) || 0,
             ly_do_dieu_chinh: s.ly_do_dieu_chinh || '',
             trang_thai_don: s.trang_thai_don, 
             tong_tien_don: 0, 
             items: []
+          }
+        } else {
+          grouped[orderId].phi_dieu_chinh += Number(s.phi_dieu_chinh) || 0
+          if (!grouped[orderId].ly_do_dieu_chinh && s.ly_do_dieu_chinh) {
+            grouped[orderId].ly_do_dieu_chinh = s.ly_do_dieu_chinh
           }
         }
         grouped[orderId].items.push(s)
@@ -71,7 +110,38 @@ export default function SalesPage() {
     }
   }
 
-  // Tính toán tài chính
+  // Thêm nhanh vào giỏ hàng từ thanh tìm kiếm
+  const handleSelectProduct = (product: any) => {
+    setCart(prevCart => {
+      const existingItem = prevCart.find(c => c.inventory_id === product.id)
+      if (existingItem) {
+        if (existingItem.so_luong_ban >= product.so_luong) {
+          setTimeout(() => alert('Vượt quá số lượng tồn kho!'), 100)
+          return prevCart
+        }
+        return prevCart.map(c => c.inventory_id === product.id ? { ...c, so_luong_ban: c.so_luong_ban + 1 } : c)
+      } else {
+        return [...prevCart, { 
+          inventory_id: product.id, 
+          ten_ao: product.ten_ao, 
+          size: product.size, 
+          gia_ban: Number(product.gia_ban), 
+          ton_kho: product.so_luong, 
+          so_luong_ban: 1 
+        }]
+      }
+    })
+    setProductSearchTerm('')
+    setIsDropdownOpen(false)
+  }
+
+  // Danh sách sản phẩm được lọc theo từ khóa tìm kiếm
+  const filteredInventory = inventory.filter(item => {
+    const query = productSearchTerm.toLowerCase()
+    return item.ten_ao.toLowerCase().includes(query) || item.size.toLowerCase().includes(query)
+  })
+
+  // Tính toán tài chính tạo đơn
   const subTotal = cart.reduce((acc, item) => acc + (Number(item.gia_ban) * item.so_luong_ban), 0)
   const discountAmount = subTotal * ((Number(formData.khuyen_mai) || 0) / 100)
   const finalTotal = subTotal - discountAmount + (Number(formData.phi_dieu_chinh) || 0)
@@ -91,12 +161,10 @@ export default function SalesPage() {
 
     const orderId = `DH-${Date.now()}`
     
-    // Phân bổ phí điều chỉnh theo tỷ trọng từng item để tổng_tien khớp chính xác
     const salesInserts = cart.map((item, index) => {
       const itemSub = Number(item.gia_ban) * item.so_luong_ban
-      const itemRatio = subTotal > 0 ? (itemSub / subTotal) : (1 / cart.length)
-      const itemAdjust = (Number(formData.phi_dieu_chinh) || 0) * itemRatio
-      const itemTotal = (itemSub * (1 - (Number(formData.khuyen_mai) || 0) / 100)) + itemAdjust
+      const itemDiscountRatio = (1 - (Number(formData.khuyen_mai) || 0) / 100)
+      const itemTotal = (itemSub * itemDiscountRatio) + (index === 0 ? (Number(formData.phi_dieu_chinh) || 0) : 0)
 
       return {
         ma_don_hang: orderId,
@@ -113,28 +181,85 @@ export default function SalesPage() {
         van_chuyen: finalShipping,
         tien_coc: index === 0 ? (Number(formData.tien_coc) || 0) : 0,
         ghi_chu_coc_dan_do: formData.ghi_chu_coc_dan_do,
-        phi_dieu_chinh: itemAdjust,
+        phi_dieu_chinh: index === 0 ? (Number(formData.phi_dieu_chinh) || 0) : 0,
         ly_do_dieu_chinh: formData.ly_do_dieu_chinh
       }
     })
 
     const { error } = await supabase.from('sales').insert(salesInserts)
     if (!error) { 
-      alert('Chốt đơn thành công! Đã cập nhật đầy đủ ghi chú và khấu trừ kho.')
+      alert('Chốt đơn thành công!')
       setCart([])
       setFormData({
         ...formData, 
         khuyen_mai: 0, 
         ghi_chu_giam_gia: '', 
         tien_coc: 0, 
-        ghi_chu_coc_dan_do: '',
-        phi_dieu_chinh: 0,
-        ly_do_dieu_chinh: '',
+        ghi_chu_coc_dan_do: '', 
+        phi_dieu_chinh: 0, 
+        ly_do_dieu_chinh: '', 
         other_shipping: ''
       })
       fetchData() 
     } else {
       alert('Lỗi: ' + error.message)
+    }
+  }
+
+  // Mở modal sửa giao dịch
+  const handleOpenEdit = (order: any) => {
+    if (!isAdmin) {
+      alert('Chỉ Admin mới có quyền sửa đổi hóa đơn giao dịch!')
+      return
+    }
+    setEditingOrder(order)
+    setEditFormData({
+      ten_nhan_vien: order.ten_nhan_vien || '',
+      van_chuyen: order.van_chuyen || '',
+      khuyen_mai: Number(order.khuyen_mai) || 0,
+      ghi_chu_giam_gia: order.ghi_chu_giam_gia || '',
+      phi_dieu_chinh: Number(order.phi_dieu_chinh) || 0,
+      ly_do_dieu_chinh: order.ly_do_dieu_chinh || '',
+      tien_coc: Number(order.tien_coc) || 0,
+      ghi_chu_coc_dan_do: order.ghi_chu_coc_dan_do || ''
+    })
+  }
+
+  // Cập nhật lại giao dịch đã thực hiện vào Supabase
+  const handleSaveEditOrder = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingOrder) return
+
+    // Tính lại subtotal của các sản phẩm có sẵn trong order
+    const orderItemsSubTotal = editingOrder.items.reduce((acc: number, item: any) => acc + (Number(item.gia_ban) * item.so_luong_ban), 0)
+    const discountRatio = 1 - (Number(editFormData.khuyen_mai) || 0) / 100
+
+    try {
+      for (let i = 0; i < editingOrder.items.length; i++) {
+        const item = editingOrder.items[i]
+        const itemSub = Number(item.gia_ban) * item.so_luong_ban
+        const itemTotal = (itemSub * discountRatio) + (i === 0 ? Number(editFormData.phi_dieu_chinh) || 0 : 0)
+
+        const { error } = await supabase.from('sales').update({
+          ten_nhan_vien: editFormData.ten_nhan_vien,
+          van_chuyen: editFormData.van_chuyen,
+          khuyen_mai: Number(editFormData.khuyen_mai) || 0,
+          ghi_chu_giam_gia: editFormData.ghi_chu_giam_gia,
+          phi_dieu_chinh: i === 0 ? Number(editFormData.phi_dieu_chinh) || 0 : 0,
+          ly_do_dieu_chinh: editFormData.ly_do_dieu_chinh,
+          tien_coc: i === 0 ? Number(editFormData.tien_coc) || 0 : 0,
+          ghi_chu_coc_dan_do: editFormData.ghi_chu_coc_dan_do,
+          tong_tien: itemTotal
+        }).eq('id', item.id)
+
+        if (error) throw error
+      }
+
+      alert('Đã cập nhật lại thông tin hóa đơn thành công!')
+      setEditingOrder(null)
+      fetchData()
+    } catch (err: any) {
+      alert('Lỗi cập nhật: ' + err.message)
     }
   }
 
@@ -150,35 +275,35 @@ export default function SalesPage() {
   }
 
   const handleEmail = (order: any) => {
-    const customerEmail = order.customers?.email;
+    const customerEmail = order.customers?.email
     if (!customerEmail) {
-      alert('Khách hàng này chưa có email. Vui lòng cập nhật ở mục Khách Hàng!');
-      return;
+      alert('Khách hàng này chưa có email. Vui lòng cập nhật ở mục Khách Hàng!')
+      return
     }
-    const subject = encodeURIComponent(`Hóa đơn mua hàng - 1997 Retro Shop (${order.ma_don_hang})`);
-    let bodyText = `Kính chào ${order.customers?.ho_ten},\n\nCảm ơn bạn đã tin tưởng mua sắm tại 1997 Retro Shop!\n\nTHÔNG TIN ĐƠN HÀNG:\n`;
+    const subject = encodeURIComponent(`Hóa đơn mua hàng - 1997 Retro Shop (${order.ma_don_hang})`)
+    let bodyText = `Kính chào ${order.customers?.ho_ten},\n\nCảm ơn bạn đã tin tưởng mua sắm tại 1997 Retro Shop!\n\nTHÔNG TIN ĐƠN HÀNG:\n`
     order.items.forEach((i: any) => {
-       bodyText += `- ${i.inventory?.ten_ao} (Size: ${i.inventory?.size || 'N/A'}) x ${i.so_luong_ban} = ${(i.gia_ban * i.so_luong_ban).toLocaleString('vi-VN')} đ\n`;
-    });
-    bodyText += `-----------------------\n`;
-    if (order.khuyen_mai > 0) bodyText += `Chiết khấu: -${order.khuyen_mai}%\n`;
-    if (order.phi_dieu_chinh !== 0) bodyText += `Phụ thu / Điều chỉnh: ${order.phi_dieu_chinh > 0 ? '+' : ''}${order.phi_dieu_chinh.toLocaleString('vi-VN')} đ (${order.ly_do_dieu_chinh})\n`;
-    bodyText += `TỔNG ĐƠN: ${order.tong_tien_don?.toLocaleString('vi-VN')} đ\n`;
+       bodyText += `- ${i.inventory?.ten_ao} (Size: ${i.inventory?.size || 'N/A'}) x ${i.so_luong_ban} = ${(i.gia_ban * i.so_luong_ban).toLocaleString('vi-VN')} đ\n`
+    })
+    bodyText += `-----------------------\n`
+    if (order.khuyen_mai > 0) bodyText += `Chiết khấu: -${order.khuyen_mai}%\n`
+    if (order.phi_dieu_chinh !== 0) bodyText += `Phụ thu / Điều chỉnh: ${order.phi_dieu_chinh > 0 ? '+' : ''}${order.phi_dieu_chinh.toLocaleString('vi-VN')} đ (${order.ly_do_dieu_chinh})\n`
+    bodyText += `TỔNG ĐƠN: ${order.tong_tien_don?.toLocaleString('vi-VN')} đ\n`
     if (order.tien_coc > 0) {
-      bodyText += `Đã đặt cọc: -${order.tien_coc.toLocaleString('vi-VN')} đ\n`;
-      bodyText += `CÒN PHẢI THU (COD): ${(order.tong_tien_don - order.tien_coc).toLocaleString('vi-VN')} đ\n`;
+      bodyText += `Đã đặt cọc: -${order.tien_coc.toLocaleString('vi-VN')} đ\n`
+      bodyText += `CÒN PHẢI THU (COD): ${(order.tong_tien_don - order.tien_coc).toLocaleString('vi-VN')} đ\n`
     }
-    bodyText += `Vận chuyển: ${order.van_chuyen}\n`;
-    if (order.ghi_chu_coc_dan_do) bodyText += `Dặn dò: ${order.ghi_chu_coc_dan_do}\n`;
-    bodyText += `\nTrân trọng,\n1997 Retro Shop`;
-    window.location.href = `mailto:${customerEmail}?subject=${subject}&body=${encodeURIComponent(bodyText)}`;
+    bodyText += `Vận chuyển: ${order.van_chuyen}\n`
+    if (order.ghi_chu_coc_dan_do) bodyText += `Dặn dò: ${order.ghi_chu_coc_dan_do}\n`
+    bodyText += `\nTrân trọng,\n1997 Retro Shop`
+    window.location.href = `mailto:${customerEmail}?subject=${subject}&body=${encodeURIComponent(bodyText)}`
   }
 
   const handlePrint = (order: any) => {
     const receiptWindow = window.open('', '_blank', 'width=400,height=750')
-    const printSubTotal = order.items.reduce((acc: number, i: any) => acc + (i.gia_ban * i.so_luong_ban), 0);
-    const discountAmt = printSubTotal * (order.khuyen_mai / 100);
-    const remaining = order.tong_tien_don - (order.tien_coc || 0);
+    const printSubTotal = order.items.reduce((acc: number, i: any) => acc + (i.gia_ban * i.so_luong_ban), 0)
+    const discountAmt = printSubTotal * (order.khuyen_mai / 100)
+    const remaining = order.tong_tien_don - (order.tien_coc || 0)
 
     const itemsHtml = order.items.map((i: any) => `
       <div style="margin-bottom: 8px;">
@@ -226,7 +351,7 @@ export default function SalesPage() {
         <div class="divider"></div>
         
         <p class="text-right" style="font-size: 13px; margin: 3px 0;">Tạm tính: ${printSubTotal.toLocaleString('vi-VN')} đ</p>
-        ${order.khuyen_mai > 0 ? `<p class="text-right" style="font-size: 13px; margin: 3px 0;">Giảm (${order.khuyen_mai}\%): -${discountAmt.toLocaleString('vi-VN')} đ</p>` : ''}
+        ${order.khuyen_mai > 0 ? `<p class="text-right" style="font-size: 13px; margin: 3px 0;">Giảm (${order.khuyen_mai}%): -${discountAmt.toLocaleString('vi-VN')} đ</p>` : ''}
         ${order.phi_dieu_chinh !== 0 ? `<p class="text-right" style="font-size: 13px; margin: 3px 0;">Điều chỉnh: ${order.phi_dieu_chinh > 0 ? '+' : ''}${order.phi_dieu_chinh.toLocaleString('vi-VN')} đ</p>` : ''}
         
         <h3 class="text-right" style="margin: 8px 0; font-size: 17px;">TỔNG ĐƠN: ${order.tong_tien_don?.toLocaleString('vi-VN')} đ</h3>
@@ -259,31 +384,38 @@ export default function SalesPage() {
   }
 
   const filteredHistory = salesHistory.filter(order => {
-    let matchSearch = true;
-    let matchDate = true;
+    let matchSearch = true
+    let matchDate = true
 
     if (searchTerm) {
-      const term = searchTerm.toLowerCase();
-      const matchCustomer = order.customers?.ho_ten?.toLowerCase().includes(term);
-      const matchOrderId = order.ma_don_hang?.toLowerCase().includes(term);
-      const matchProduct = order.items.some((item: any) => item.inventory?.ten_ao?.toLowerCase().includes(term));
-      const matchNote = order.ghi_chu_coc_dan_do?.toLowerCase().includes(term);
-      matchSearch = !!(matchCustomer || matchOrderId || matchProduct || matchNote);
+      const term = searchTerm.toLowerCase()
+      const matchCustomer = order.customers?.ho_ten?.toLowerCase().includes(term)
+      const matchOrderId = order.ma_don_hang?.toLowerCase().includes(term)
+      const matchProduct = order.items.some((item: any) => item.inventory?.ten_ao?.toLowerCase().includes(term))
+      const matchNote = order.ghi_chu_coc_dan_do?.toLowerCase().includes(term)
+      matchSearch = !!(matchCustomer || matchOrderId || matchProduct || matchNote)
     }
 
     if (searchDate) {
-      const orderDateStr = new Date(order.ngay_ban).toLocaleDateString('en-CA');
-      matchDate = orderDateStr === searchDate;
+      const orderDateStr = new Date(order.ngay_ban).toLocaleDateString('en-CA')
+      matchDate = orderDateStr === searchDate
     }
 
-    return matchSearch && matchDate;
-  });
+    return matchSearch && matchDate
+  })
 
   return (
     <div className="p-8 max-w-7xl mx-auto space-y-8">
-      <div className="flex items-center gap-3">
-        <ShoppingCart size={32} className="text-green-600" />
-        <h1 className="text-3xl font-bold text-gray-900">Màn hình Bán Hàng (POS 1.2 Pro)</h1>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <ShoppingCart size={32} className="text-green-600" />
+          <h1 className="text-3xl font-bold text-gray-900">Màn hình Bán Hàng (POS 1.3 Ultimate)</h1>
+        </div>
+        {isAdmin && (
+          <span className="bg-purple-100 text-purple-800 text-xs font-bold px-3 py-1 rounded-full border border-purple-200">
+            Quyền: Admin (Được sửa đơn)
+          </span>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
@@ -306,51 +438,51 @@ export default function SalesPage() {
             </div>
           </div>
           
-          {/* TỰ ĐỘNG THÊM ÁO */}
-          <div className="border-t pt-3">
-            <label className="block text-sm font-medium mb-1 text-orange-600">Thêm áo vào giỏ hàng (Tự động thêm)</label>
-            <select 
-              className="w-full border rounded p-2.5 text-sm bg-orange-50 focus:outline-none focus:ring-2 focus:ring-orange-500 font-medium cursor-pointer" 
-              value={selectedProductId} 
-              onChange={e => {
-                const productId = e.target.value;
-                if (!productId) return;
-                
-                const product = inventory.find(i => i.id === productId);
-                if (!product) return;
+          {/* TÍNH NĂNG MỚI: TÌM KIẾM SẢN PHẨM NHANH (LIVE SEARCH DROPDOWN) */}
+          <div className="border-t pt-3 relative" ref={dropdownRef}>
+            <label className="block text-sm font-bold text-orange-600 mb-1">🔍 Tìm kiếm và thêm áo nhanh</label>
+            <div className="relative">
+              <Search size={16} className="absolute left-3 top-3 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Gõ tên áo (vd: Argentina, MU, Barca) hoặc Size..."
+                className="w-full border rounded-lg pl-9 pr-3 py-2 text-sm bg-orange-50/50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-orange-500 font-medium"
+                value={productSearchTerm}
+                onFocus={() => setIsDropdownOpen(true)}
+                onChange={e => {
+                  setProductSearchTerm(e.target.value)
+                  setIsDropdownOpen(true)
+                }}
+              />
+            </div>
 
-                setCart(prevCart => {
-                  const existingItem = prevCart.find(c => c.inventory_id === product.id);
-                  if (existingItem) {
-                    if (existingItem.so_luong_ban >= product.so_luong) {
-                      setTimeout(() => alert('Vượt quá số lượng tồn kho!'), 100);
-                      return prevCart;
-                    }
-                    return prevCart.map(c => c.inventory_id === product.id ? { ...c, so_luong_ban: c.so_luong_ban + 1 } : c);
-                  } else {
-                    return [...prevCart, { 
-                      inventory_id: product.id, 
-                      ten_ao: product.ten_ao, 
-                      size: product.size, 
-                      gia_ban: Number(product.gia_ban), 
-                      ton_kho: product.so_luong, 
-                      so_luong_ban: 1 
-                    }];
-                  }
-                });
-                setSelectedProductId('');
-              }}
-            >
-              <option value="">-- Bấm vào đây để chọn áo bán --</option>
-              {inventory.map(i => (
-                <option key={i.id} value={i.id}>
-                  {i.ten_ao} (Size: {i.size}) - Tồn: {i.so_luong} - {Number(i.gia_ban).toLocaleString('vi-VN')}đ
-                </option>
-              ))}
-            </select>
+            {/* Menu Dropdown kết quả tìm kiếm */}
+            {isDropdownOpen && (
+              <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-xl max-h-60 overflow-y-auto divide-y">
+                {filteredInventory.map(item => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => handleSelectProduct(item)}
+                    className="w-full text-left p-2.5 hover:bg-orange-50 flex items-center justify-between text-sm transition-colors"
+                  >
+                    <div>
+                      <div className="font-semibold text-gray-800">{item.ten_ao}</div>
+                      <div className="text-xs text-gray-500">
+                        Size: <span className="font-bold text-blue-600">{item.size}</span> | Tồn: <span className="font-bold text-orange-600">{item.so_luong}</span>
+                      </div>
+                    </div>
+                    <span className="font-bold text-green-700">{Number(item.gia_ban).toLocaleString('vi-VN')}đ</span>
+                  </button>
+                ))}
+                {filteredInventory.length === 0 && (
+                  <div className="p-3 text-center text-xs text-gray-400">Không tìm thấy áo phù hợp</div>
+                )}
+              </div>
+            )}
           </div>
 
-          {/* GIAI ĐOẠN 1: PHƯƠNG THỨC GIAO HÀNG */}
+          {/* PHƯƠNG THỨC GIAO HÀNG */}
           <div className="border-t pt-3 space-y-2">
             <label className="block text-sm font-bold text-gray-700">Phương thức giao hàng</label>
             <select 
@@ -377,7 +509,7 @@ export default function SalesPage() {
             )}
           </div>
 
-          {/* GIAI ĐOẠN 1: TIỀN CỌC VÀ DẶN DÒ */}
+          {/* TIỀN CỌC VÀ DẶN DÒ */}
           <div className="border-t pt-3 space-y-3">
             <label className="block text-sm font-bold text-gray-700">Thông tin cọc & Ghi chú dặn dò</label>
             <div>
@@ -452,14 +584,12 @@ export default function SalesPage() {
                           onChange={e => setCart(cart.map(item => item.inventory_id === c.inventory_id ? {...item, so_luong_ban: Number(e.target.value)} : item))} 
                         />
                       </td>
-                      {/* GIAI ĐOẠN 2: HIỆU CHỈNH GIÁ BÁN TỪNG ÁO */}
                       <td className="p-2 text-right">
                         <input 
                           type="number" 
-                          min="0"
+                          min="0" 
                           step="5000"
                           className="w-32 border rounded text-right p-1 text-sm font-semibold text-blue-800 bg-yellow-50 focus:bg-white" 
-                          title="Chủ shop có thể chỉnh lại giá lẻ từng món"
                           value={c.gia_ban} 
                           onChange={e => setCart(cart.map(item => item.inventory_id === c.inventory_id ? {...item, gia_ban: Number(e.target.value)} : item))} 
                         />
@@ -479,7 +609,7 @@ export default function SalesPage() {
             )}
           </div>
 
-          {/* GIAI ĐOẠN 2: ĐIỀU CHỈNH PHỤ PHÍ / KÊ GIÁ TỔNG ĐƠN */}
+          {/* ĐIỀU CHỈNH PHỤ PHÍ */}
           <div className="bg-amber-50 p-3 rounded-lg mt-4 border border-amber-200">
             <span className="text-xs font-bold text-amber-900 block mb-2">⚡ Hiệu chỉnh giá tổng đơn (Phí ship tỉnh / Đóng gói / Phụ phí)</span>
             <div className="grid grid-cols-2 gap-3">
@@ -522,7 +652,7 @@ export default function SalesPage() {
             {formData.phi_dieu_chinh !== 0 && (
               <div className="flex justify-between text-sm text-amber-800 font-medium">
                 <span>Hiệu chỉnh / Phụ phí:</span> 
-                <span>{formData.phi_dieu_chinh > 0 ? '+' : ''}{formData.phi_dieu_chinh.toLocaleString('vi-VN')} đ</span>
+                <span>{formData.phi_dieu_chinh > 0 ? '+' : ''}{Number(formData.phi_dieu_chinh).toLocaleString('vi-VN')} đ</span>
               </div>
             )}
             <div className="flex justify-between items-end border-t pt-2">
@@ -595,7 +725,7 @@ export default function SalesPage() {
               </thead>
               <tbody className="divide-y">
                 {filteredHistory.map((order) => {
-                  const codBalance = order.tong_tien_don - (order.tien_coc || 0);
+                  const codBalance = order.tong_tien_don - (order.tien_coc || 0)
                   return (
                     <tr key={order.ma_don_hang} className={order.trang_thai_don === 'BI_BOM' ? 'bg-red-50 text-gray-400' : 'hover:bg-gray-50'}>
                       <td className="p-4">
@@ -619,7 +749,7 @@ export default function SalesPage() {
                         {order.khuyen_mai > 0 && <span className="text-red-500 font-bold block mt-1">Giảm giá: -{order.khuyen_mai}%</span>}
                         {order.phi_dieu_chinh !== 0 && (
                           <span className="text-amber-700 block mt-0.5">
-                            Phụ thu: {order.phi_dieu_chinh > 0 ? '+' : ''}{order.phi_dieu_chinh.toLocaleString('vi-VN')}đ ({order.ly_do_dieu_chinh})
+                            Phụ thu: {order.phi_dieu_chinh > 0 ? '+' : ''}{Number(order.phi_dieu_chinh).toLocaleString('vi-VN')}đ ({order.ly_do_dieu_chinh})
                           </span>
                         )}
                         {order.ghi_chu_coc_dan_do && (
@@ -629,22 +759,32 @@ export default function SalesPage() {
                         )}
                       </td>
                       <td className="p-4 text-right">
-                        <div className="font-black text-green-700 text-base">{order.tong_tien_don?.toLocaleString('vi-VN')} đ</div>
+                        <div className="font-black text-green-700 text-base">{Number(order.tong_tien_don).toLocaleString('vi-VN')} đ</div>
                         {order.tien_coc > 0 && (
                           <div className="text-xs mt-0.5">
-                            <span className="text-gray-500">Cọc: {order.tien_coc.toLocaleString('vi-VN')}đ</span>
+                            <span className="text-gray-500">Cọc: {Number(order.tien_coc).toLocaleString('vi-VN')}đ</span>
                             <div className="font-bold text-red-600">Thu COD: {codBalance.toLocaleString('vi-VN')}đ</div>
                           </div>
                         )}
                       </td>
                       <td className="p-4 text-center">
-                        <div className="flex items-center justify-center gap-3">
+                        <div className="flex items-center justify-center gap-2.5">
                           <button onClick={() => handlePrint(order)} title="In hóa đơn" className="text-gray-500 hover:text-blue-600">
                             <Printer size={18} />
                           </button>
                           <button onClick={() => handleEmail(order)} title="Gửi Email Hóa Đơn" className="text-gray-500 hover:text-orange-600">
                             <Mail size={18} />
                           </button>
+                          
+                          {/* NÚT CHỈNH SỬA ĐƠN HÀNG (CÓ CHUẨN BỊ PHÂN QUYỀN) */}
+                          <button 
+                            onClick={() => handleOpenEdit(order)} 
+                            title="Sửa thông tin hóa đơn (Admin)" 
+                            className="text-gray-500 hover:text-purple-600"
+                          >
+                            <Edit3 size={18} />
+                          </button>
+
                           {order.trang_thai_don === 'THANH_CONG' ? (
                             <button onClick={() => handleReturnOrder(order)} title="Khách bom đơn" className="text-red-500 hover:text-red-700">
                               <RotateCcw size={18} />
@@ -666,6 +806,133 @@ export default function SalesPage() {
         </div>
 
       </div>
+
+      {/* MODAL SỬA GIAO DỊCH (EDIT ORDER MODAL) */}
+      {editingOrder && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div>
+                <h3 className="text-lg font-bold text-gray-900">Sửa hóa đơn: {editingOrder.ma_don_hang}</h3>
+                <span className="text-xs text-gray-500">Khách hàng: {editingOrder.customers?.ho_ten}</span>
+              </div>
+              <button onClick={() => setEditingOrder(null)} className="text-gray-400 hover:text-gray-600">
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditOrder} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Thu ngân</label>
+                  <input
+                    type="text"
+                    required
+                    className="w-full border rounded p-2 text-sm"
+                    value={editFormData.ten_nhan_vien}
+                    onChange={e => setEditFormData({ ...editFormData, ten_nhan_vien: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Phương thức vận chuyển</label>
+                  <input
+                    type="text"
+                    required
+                    className="w-full border rounded p-2 text-sm"
+                    value={editFormData.van_chuyen}
+                    onChange={e => setEditFormData({ ...editFormData, van_chuyen: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Chiết khấu (%)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    className="w-full border rounded p-2 text-sm text-red-600 font-bold"
+                    value={editFormData.khuyen_mai}
+                    onChange={e => setEditFormData({ ...editFormData, khuyen_mai: Number(e.target.value) })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Lý do giảm giá</label>
+                  <input
+                    type="text"
+                    className="w-full border rounded p-2 text-sm"
+                    value={editFormData.ghi_chu_giam_gia}
+                    onChange={e => setEditFormData({ ...editFormData, ghi_chu_giam_gia: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 bg-amber-50 p-3 rounded-lg border border-amber-200">
+                <div>
+                  <label className="block text-xs font-semibold text-amber-900 mb-1">Phụ phí / Hiệu chỉnh (VNĐ)</label>
+                  <input
+                    type="number"
+                    step="1000"
+                    className="w-full border rounded p-2 text-sm font-bold bg-white"
+                    value={editFormData.phi_dieu_chinh}
+                    onChange={e => setEditFormData({ ...editFormData, phi_dieu_chinh: Number(e.target.value) })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-amber-900 mb-1">Lý do hiệu chỉnh</label>
+                  <input
+                    type="text"
+                    className="w-full border rounded p-2 text-sm bg-white"
+                    value={editFormData.ly_do_dieu_chinh}
+                    onChange={e => setEditFormData({ ...editFormData, ly_do_dieu_chinh: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Tiền cọc (VNĐ)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="1000"
+                    className="w-full border rounded p-2 text-sm text-green-700 font-bold"
+                    value={editFormData.tien_coc}
+                    onChange={e => setEditFormData({ ...editFormData, tien_coc: Number(e.target.value) })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">Dặn dò / Ghi chú ship</label>
+                  <textarea
+                    rows={2}
+                    className="w-full border rounded p-2 text-sm"
+                    value={editFormData.ghi_chu_coc_dan_do}
+                    onChange={e => setEditFormData({ ...editFormData, ghi_chu_coc_dan_do: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="border-t pt-4 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setEditingOrder(null)}
+                  className="px-4 py-2 border rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50"
+                >
+                  Hủy
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-purple-600 text-white rounded-lg text-sm font-bold hover:bg-purple-700 shadow-md"
+                >
+                  Lưu thay đổi
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
     </div>
   )
 }
